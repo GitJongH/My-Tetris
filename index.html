@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>테트리스</title>
+<style>
+  :root { --bg:#0f1220; --panel:#1a1f36; --text:#e8ebf7; --muted:#8e96b8; --accent:#5b8cff; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:var(--bg); color:var(--text); font-family:"Segoe UI","Malgun Gothic",sans-serif; }
+  #bg { position:fixed; inset:0; width:100%; height:100%; z-index:0; background:none; border-radius:0; }
+  .game { position:relative; z-index:1; display:flex; gap:16px; padding:16px; align-items:flex-start; }
+  .side { display:flex; flex-direction:column; gap:12px; width:140px; }
+  .box { background:var(--panel); border-radius:10px; padding:10px; text-align:center; }
+  .box h3 { margin:0 0 6px; font-size:12px; color:var(--muted); font-weight:600; letter-spacing:.08em; }
+  .box .val { font-size:22px; font-variant-numeric:tabular-nums; }
+  .boardWrap { position:relative; box-shadow:0 0 40px rgba(91,140,255,.35); border-radius:8px; }
+  canvas { display:block; background:#0a0d1a; border-radius:8px; }
+  #overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+             background:rgba(10,13,26,.78); border-radius:8px; text-align:center; padding:16px; }
+  #overlay h1 { margin:0 0 8px; font-size:28px; }
+  #overlay p { margin:4px 0; color:var(--muted); font-size:14px; }
+  #overlay .go { margin-top:12px; color:var(--accent); font-weight:600; }
+  .keys { font-size:12px; color:var(--muted); text-align:left; line-height:1.7; }
+  .keys b { color:var(--text); font-weight:600; }
+  @media (max-width:560px) { .game { flex-direction:column; align-items:center; } .side { flex-direction:row; width:auto; flex-wrap:wrap; justify-content:center; } }
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div class="game">
+  <div class="side">
+    <div class="box"><h3>HOLD</h3><canvas id="hold" width="100" height="80"></canvas></div>
+    <div class="box"><h3>점수</h3><div class="val" id="score">0</div></div>
+    <div class="box"><h3>최고점수</h3><div class="val" id="best">0</div></div>
+    <div class="box"><h3>레벨</h3><div class="val" id="level">1</div></div>
+    <div class="box"><h3>줄</h3><div class="val" id="lines">0</div></div>
+    <div class="box"><h3>콤보</h3><div class="val" id="combo">0</div></div>
+  </div>
+  <div class="boardWrap">
+    <canvas id="board" width="300" height="600"></canvas>
+    <div id="overlay"></div>
+  </div>
+  <div class="side">
+    <div class="box"><h3>NEXT</h3><canvas id="next" width="100" height="260"></canvas></div>
+    <div class="box keys">
+      <b>← →</b> 이동<br><b>↓</b> 소프트 드롭<br><b>↑ / X</b> 회전<br><b>Z</b> 반대 회전<br>
+      <b>Space</b> 하드 드롭<br><b>C / Shift</b> 홀드<br><b>P</b> 일시정지<br><b>M</b> 음소거
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const COLS = 10, ROWS = 20, CELL = 30;
+  const COLORS = { I:'#2ee6e6', O:'#f5d82e', T:'#b44cf0', S:'#4cd964', Z:'#f0443c', J:'#3d6bff', L:'#ff9a2e' };
+  const SHAPES = {
+    I:[[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
+    O:[[1,1],[1,1]],
+    T:[[0,1,0],[1,1,1],[0,0,0]],
+    S:[[0,1,1],[1,1,0],[0,0,0]],
+    Z:[[1,1,0],[0,1,1],[0,0,0]],
+    J:[[1,0,0],[1,1,1],[0,0,0]],
+    L:[[0,0,1],[1,1,1],[0,0,0]],
+  };
+  const TYPES = Object.keys(SHAPES);
+
+  const $ = id => document.getElementById(id);
+  const boardCv = $('board'), bctx = boardCv.getContext('2d');
+  const nextCv = $('next'), nctx = nextCv.getContext('2d');
+  const holdCv = $('hold'), hctx = holdCv.getContext('2d');
+  const overlay = $('overlay');
+
+
+  // ---- 동적 배경 ----
+  const bgCv = $('bg'), gctx = bgCv.getContext('2d');
+  let bgW = 0, bgH = 0, bgT = 0, intensity = 0, shake = 0, burstHue = 0;
+  const embers = [], rings = [];
+  function resizeBg() { bgW = bgCv.width = innerWidth; bgH = bgCv.height = innerHeight; }
+  addEventListener('resize', resizeBg); resizeBg();
+  function spawnEmber(burst) {
+    const hue = burst ? burstHue + Math.random() * 40 : 10 + Math.random() * 40;
+    embers.push({
+      x: burst ? bgW / 2 + (Math.random() - .5) * 300 : Math.random() * bgW,
+      y: burst ? bgH / 2 : bgH + 10,
+      vx: (Math.random() - .5) * (burst ? 14 : 1.6),
+      vy: burst ? (Math.random() - .8) * 14 : -(1.5 + Math.random() * 3.5),
+      r: 1 + Math.random() * (burst ? 4 : 3), life: 1, hue,
+    });
+  }
+  function bgBurst(n) {
+    intensity = Math.min(1.6, intensity + 0.5 * n);
+    shake = 6 * n; burstHue = [0, 200, 280, 320, 50][n] || 0;
+    for (let i = 0; i < 40 * n; i++) spawnEmber(true);
+    rings.push({ r: 0, a: 1, hue: burstHue });
+  }
+  function drawBg(dt) {
+    bgT += dt / 1000;
+    const lv = typeof level === 'number' ? level : 1;
+    const speed = 1 + Math.min(lv, 15) * 0.25;
+    intensity *= 0.97;
+    const baseHue = (bgT * 20 * speed + lv * 25) % 360;
+    // 맥동하는 방사형 그라데이션
+    const pulse = 0.5 + 0.5 * Math.sin(bgT * 2 * speed);
+    const g = gctx.createRadialGradient(bgW / 2, bgH / 2, 0, bgW / 2, bgH / 2, Math.max(bgW, bgH) * (0.6 + 0.15 * pulse));
+    g.addColorStop(0, `hsl(${baseHue},70%,${14 + 10 * pulse + intensity * 20}%)`);
+    g.addColorStop(0.55, `hsl(${(baseHue + 60) % 360},65%,8%)`);
+    g.addColorStop(1, '#05060f');
+    gctx.fillStyle = g; gctx.fillRect(0, 0, bgW, bgH);
+    // 사선 속도선
+    gctx.save();
+    gctx.globalCompositeOperation = 'lighter';
+    gctx.lineWidth = 2;
+    for (let i = 0; i < 28; i++) {
+      const p = ((bgT * 0.25 * speed + i * 0.137) % 1);
+      const x = ((i * 97) % bgW) + Math.sin(bgT + i) * 30;
+      const y = bgH * (1 - p) * 1.2 - 60;
+      const len = 60 + (i % 5) * 40 + intensity * 120;
+      gctx.strokeStyle = `hsla(${(baseHue + i * 12) % 360},90%,60%,${0.05 + 0.08 * (1 - p) + intensity * 0.1})`;
+      gctx.beginPath(); gctx.moveTo(x, y); gctx.lineTo(x - len * 0.25, y + len); gctx.stroke();
+    }
+    // 충격파 링
+    for (let i = rings.length - 1; i >= 0; i--) {
+      const r = rings[i]; r.r += 18; r.a *= 0.94;
+      if (r.a < 0.02) { rings.splice(i, 1); continue; }
+      gctx.strokeStyle = `hsla(${r.hue},100%,65%,${r.a})`; gctx.lineWidth = 4 + r.a * 10;
+      gctx.beginPath(); gctx.arc(bgW / 2, bgH / 2, r.r, 0, Math.PI * 2); gctx.stroke();
+    }
+    // 불씨 파티클
+    const rate = 0.5 + lv * 0.15 + intensity * 3;
+    for (let i = 0; i < rate; i++) if (Math.random() < Math.min(1, rate - i)) spawnEmber(false);
+    for (let i = embers.length - 1; i >= 0; i--) {
+      const e = embers[i];
+      e.x += e.vx + Math.sin(bgT * 3 + i) * 0.4; e.y += e.vy; e.vy += 0.02; e.life -= 0.006;
+      if (e.life <= 0 || e.y < -20 || e.y > bgH + 40) { embers.splice(i, 1); continue; }
+      gctx.fillStyle = `hsla(${e.hue},100%,60%,${e.life * 0.9})`;
+      gctx.beginPath(); gctx.arc(e.x, e.y, e.r * (0.5 + e.life), 0, Math.PI * 2); gctx.fill();
+    }
+    if (embers.length > 900) embers.splice(0, embers.length - 900);
+    gctx.restore();
+    // 화면 흔들림
+    if (shake > 0.2) {
+      document.querySelector('.game').style.transform = `translate(${(Math.random() - .5) * shake}px,${(Math.random() - .5) * shake}px)`;
+      shake *= 0.85;
+    } else if (shake !== 0) { shake = 0; document.querySelector('.game').style.transform = ''; }
+  }
+
+  // ---- 사운드 ----
+  let audio = null, muted = false;
+  function beep(freq, dur = 0.08, type = 'square', vol = 0.05) {
+    if (muted) return;
+    try {
+      audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.type = type; o.frequency.value = freq;
+      g.gain.setValueAtTime(vol, audio.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + dur);
+      o.connect(g); g.connect(audio.destination);
+      o.start(); o.stop(audio.currentTime + dur);
+    } catch (e) {}
+  }
+  const sfx = {
+    move: () => beep(220, 0.04),
+    rotate: () => beep(330, 0.05),
+    lock: () => beep(140, 0.08),
+    drop: () => beep(100, 0.12, 'sawtooth'),
+    hold: () => beep(260, 0.06, 'triangle'),
+    clear: n => [0, 1, 2, 3].slice(0, n).forEach((_, i) => setTimeout(() => beep(440 + i * 110, 0.12, 'triangle', 0.07), i * 70)),
+    combo: n => [0, 1, 2].forEach(i => setTimeout(() => beep(520 * Math.pow(1.0595, Math.min(n, 12) * 2 + i * 4), 0.1, 'triangle', 0.07), i * 60)),
+    over: () => [300, 240, 180, 120].forEach((f, i) => setTimeout(() => beep(f, 0.2, 'sawtooth', 0.06), i * 150)),
+  };
+
+  // ---- 최고점수 ----
+  function loadBest() { try { return +localStorage.getItem('tetris-best') || 0; } catch (e) { return 0; } }
+  function saveBest(v) { try { localStorage.setItem('tetris-best', v); } catch (e) {} }
+
+  // ---- 상태 ----
+  let grid, piece, queue, hold, canHold, score, level, lines, best = loadBest();
+  let state = 'start'; // start | play | pause | over
+  let dropAcc = 0, lastTime = 0, lockTimer = 0, lockResets = 0;
+  let flashRows = [], flashTime = 0;
+  let combo = 0, maxCombo = 0;
+  const popups = [];
+  const CLEAR_NAMES = ['', 'SINGLE', 'DOUBLE', 'TRIPLE', 'TETRIS!'];
+  function addPopup(text, size, hue, y) { for (let i = popups.length - 1; i >= 0; i--) if (popups[i].y === y) popups.splice(i, 1); popups.push({ text, size, hue, y, life: 1 }); }
+
+  const rotate = (m, dir) => {
+    const n = m.length, r = m.map(row => row.slice());
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++)
+      dir > 0 ? (r[x][n - 1 - y] = m[y][x]) : (r[n - 1 - x][y] = m[y][x]);
+    return r;
+  };
+
+  function newBag() {
+    const b = TYPES.slice();
+    for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; }
+    return b;
+  }
+  function makePiece(type) {
+    const shape = SHAPES[type].map(r => r.slice());
+    return { type, shape, x: Math.floor((COLS - shape.length) / 2), y: type === 'I' ? -1 : 0 };
+  }
+  function spawn(type) {
+    while (queue.length < 7) queue.push(...newBag());
+    piece = makePiece(type || queue.shift());
+    lockTimer = 0; lockResets = 0; dropAcc = 0;
+    if (collides(piece)) gameOver();
+  }
+
+  function collides(p, dx = 0, dy = 0, shape = p.shape) {
+    for (let y = 0; y < shape.length; y++) for (let x = 0; x < shape.length; x++) {
+      if (!shape[y][x]) continue;
+      const nx = p.x + x + dx, ny = p.y + y + dy;
+      if (nx < 0 || nx >= COLS || ny >= ROWS) return true;
+      if (ny >= 0 && grid[ny][nx]) return true;
+    }
+    return false;
+  }
+
+  function reset() {
+    grid = Array.from({ length: ROWS }, () => Array(COLS).fill(null));
+    queue = []; hold = null; canHold = true;
+    score = 0; level = 1; lines = 0; flashRows = [];
+    combo = 0; maxCombo = 0; popups.length = 0;
+    spawn();
+    updateHud();
+  }
+
+  function gravityMs() { return Math.max(60, 1000 * Math.pow(0.82, level - 1)); }
+
+  function tryMove(dx, dy) {
+    if (collides(piece, dx, dy)) return false;
+    piece.x += dx; piece.y += dy;
+    if (dy === 0) onGroundAction();
+    return true;
+  }
+  function onGroundAction() {
+    if (collides(piece, 0, 1) && lockResets < 15) { lockTimer = 0; lockResets++; }
+  }
+  function tryRotate(dir) {
+    if (piece.type === 'O') return;
+    const s = rotate(piece.shape, dir);
+    const kicks = piece.type === 'I'
+      ? [[0,0],[-2,0],[2,0],[-1,0],[1,0],[0,-1],[0,1]]
+      : [[0,0],[-1,0],[1,0],[0,-1],[-1,-1],[1,-1],[-2,0],[2,0]];
+    for (const [kx, ky] of kicks) {
+      if (!collides(piece, kx, ky, s)) {
+        piece.shape = s; piece.x += kx; piece.y += ky;
+        onGroundAction(); sfx.rotate();
+        return;
+      }
+    }
+  }
+
+  function ghostY() { let d = 0; while (!collides(piece, 0, d + 1)) d++; return piece.y + d; }
+
+  function hardDrop() {
+    let d = 0;
+    while (!collides(piece, 0, 1)) { piece.y++; d++; }
+    score += d * 2;
+    sfx.drop();
+    shake = Math.max(shake, 5);
+    lockPiece();
+  }
+
+  function lockPiece() {
+    piece.shape.forEach((row, y) => row.forEach((v, x) => {
+      if (!v) return;
+      const gy = piece.y + y;
+      if (gy >= 0) grid[gy][piece.x + x] = piece.type;
+    }));
+    sfx.lock();
+    const full = [];
+    for (let y = 0; y < ROWS; y++) if (grid[y].every(c => c)) full.push(y);
+    if (full.length) {
+      full.forEach(y => { grid.splice(y, 1); grid.unshift(Array(COLS).fill(null)); });
+      flashRows = full; flashTime = 140;
+      const pts = [0, 100, 300, 500, 800][full.length];
+      score += pts * level;
+      lines += full.length;
+      level = Math.floor(lines / 10) + 1;
+      sfx.clear(full.length);
+      bgBurst(full.length);
+      combo++;
+      maxCombo = Math.max(maxCombo, combo);
+      addPopup(CLEAR_NAMES[full.length], full.length === 4 ? 40 : 28, [0, 190, 140, 50, 320][full.length], 0);
+      if (combo >= 2) {
+        const bonus = 50 * (combo - 1) * level;
+        score += bonus;
+        addPopup(`${combo} COMBO!  +${bonus}`, Math.min(34, 20 + combo * 2), (combo * 35) % 360, 1);
+        sfx.combo(combo);
+        bgBurst(Math.min(4, combo));
+      }
+    }
+    if (!full.length) combo = 0;
+    canHold = true;
+    updateHud();
+    spawn();
+  }
+
+  function doHold() {
+    if (!canHold) return;
+    const t = piece.type;
+    if (hold) { const h = hold; hold = t; spawn(h); } else { hold = t; spawn(); }
+    canHold = false;
+    sfx.hold();
+  }
+
+  function gameOver() {
+    state = 'over';
+    if (score > best) { best = score; saveBest(best); }
+    updateHud(); sfx.over(); showOverlay();
+  }
+
+  function updateHud() {
+    $('score').textContent = score; $('level').textContent = level;
+    $('lines').textContent = lines; $('combo').textContent = combo > 1 ? 'x' + combo : '-'; $('best').textContent = Math.max(best, score);
+  }
+
+  function showOverlay() {
+    if (state === 'play') { overlay.style.display = 'none'; return; }
+    overlay.style.display = 'flex';
+    if (state === 'start') overlay.innerHTML = '<h1>TETRIS</h1><p>줄을 완성해 점수를 얻으세요</p><div class="go">Enter 로 시작</div>';
+    if (state === 'pause') overlay.innerHTML = '<h1>일시정지</h1><div class="go">P 로 계속</div>';
+    if (state === 'over') overlay.innerHTML = `<h1>게임 오버</h1><p>점수 ${score}</p><p>최고점수 ${best}</p><p>최대 콤보 ${maxCombo}</p><div class="go">Enter 로 다시 시작</div>`;
+  }
+
+  // ---- 그리기 ----
+  function drawCell(ctx, x, y, color, size, alpha = 1) {
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    ctx.fillRect(x * size + 1, y * size + 1, size - 2, size - 2);
+    ctx.fillStyle = 'rgba(255,255,255,.22)';
+    ctx.fillRect(x * size + 1, y * size + 1, size - 2, 4);
+    ctx.globalAlpha = 1;
+  }
+  function drawMini(ctx, cv, types) {
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const size = 20;
+    types.forEach((t, i) => {
+      if (!t) return;
+      const s = SHAPES[t];
+      const filled = s.map((r, y) => r.map((v, x) => v ? [x, y] : null)).flat().filter(Boolean);
+      const minX = Math.min(...filled.map(f => f[0])), maxX = Math.max(...filled.map(f => f[0]));
+      const minY = Math.min(...filled.map(f => f[1])), maxY = Math.max(...filled.map(f => f[1]));
+      const w = (maxX - minX + 1) * size, h = (maxY - minY + 1) * size;
+      const ox = (cv.width - w) / 2, oy = i * 60 + (60 - h) / 2;
+      filled.forEach(([x, y]) => {
+        ctx.fillStyle = COLORS[t];
+        ctx.fillRect(ox + (x - minX) * size + 1, oy + (y - minY) * size + 1, size - 2, size - 2);
+      });
+    });
+  }
+
+  function draw() {
+    bctx.clearRect(0, 0, boardCv.width, boardCv.height);
+    bctx.strokeStyle = 'rgba(255,255,255,.05)'; bctx.lineWidth = 1;
+    for (let x = 1; x < COLS; x++) { bctx.beginPath(); bctx.moveTo(x * CELL, 0); bctx.lineTo(x * CELL, ROWS * CELL); bctx.stroke(); }
+    for (let y = 1; y < ROWS; y++) { bctx.beginPath(); bctx.moveTo(0, y * CELL); bctx.lineTo(COLS * CELL, y * CELL); bctx.stroke(); }
+
+    if (!grid) return;
+    for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++)
+      if (grid[y][x]) drawCell(bctx, x, y, COLORS[grid[y][x]], CELL);
+
+    if (state === 'play' || state === 'pause') {
+      const gy = ghostY();
+      piece.shape.forEach((row, y) => row.forEach((v, x) => {
+        if (v && gy + y >= 0) drawCell(bctx, piece.x + x, gy + y, COLORS[piece.type], CELL, 0.22);
+      }));
+      piece.shape.forEach((row, y) => row.forEach((v, x) => {
+        if (v && piece.y + y >= 0) drawCell(bctx, piece.x + x, piece.y + y, COLORS[piece.type], CELL);
+      }));
+    }
+    if (flashTime > 0) {
+      bctx.fillStyle = `rgba(255,255,255,${flashTime / 140 * 0.6})`;
+      flashRows.forEach(y => bctx.fillRect(0, y * CELL, COLS * CELL, CELL));
+    }
+    for (let i = popups.length - 1; i >= 0; i--) {
+      const p = popups[i];
+      p.life -= 0.012;
+      if (p.life <= 0) { popups.splice(i, 1); continue; }
+      const rise = (1 - p.life) * 50, pop = p.life > 0.9 ? 1 + (p.life - 0.9) * 8 : 1;
+      bctx.save();
+      bctx.translate(COLS * CELL / 2, ROWS * CELL * 0.38 + p.y * 44 - rise);
+      bctx.scale(pop, pop);
+      bctx.globalAlpha = Math.min(1, p.life * 2);
+      bctx.font = `900 ${p.size}px "Segoe UI",sans-serif`;
+      bctx.textAlign = 'center'; bctx.textBaseline = 'middle';
+      bctx.lineWidth = 5; bctx.strokeStyle = 'rgba(0,0,0,.7)';
+      bctx.shadowColor = `hsl(${p.hue},100%,60%)`; bctx.shadowBlur = 18;
+      bctx.strokeText(p.text, 0, 0);
+      bctx.fillStyle = `hsl(${p.hue},100%,75%)`;
+      bctx.fillText(p.text, 0, 0);
+      bctx.restore();
+    }
+    drawMini(nctx, nextCv, queue.slice(0, 4));
+    drawMini(hctx, holdCv, [hold]);
+  }
+
+  // ---- 루프 ----
+  function frame(t) {
+    const dt = Math.min(t - lastTime, 100); lastTime = t;
+    if (flashTime > 0) flashTime -= dt;
+    if (state === 'play') {
+      const soft = keys.has('ArrowDown');
+      const interval = soft ? Math.min(50, gravityMs()) : gravityMs();
+      dropAcc += dt;
+      if (collides(piece, 0, 1)) {
+        lockTimer += dt;
+        if (lockTimer >= 500) lockPiece();
+      } else {
+        lockTimer = 0;
+        while (dropAcc >= interval && !collides(piece, 0, 1)) {
+          piece.y++; dropAcc -= interval;
+          if (soft) score++;
+        }
+        if (dropAcc >= interval) dropAcc = 0;
+        updateHud();
+      }
+    }
+    drawBg(dt);
+    if (grid) draw();
+    requestAnimationFrame(frame);
+  }
+
+  // ---- 입력 ----
+  const keys = new Set();
+  const DAS = 150, ARR = 40;
+  let repeat = null;
+  function startRepeat(dir) {
+    stopRepeat();
+    repeat = { dir, timer: setTimeout(() => {
+      repeat.timer = setInterval(() => { if (state === 'play' && tryMove(dir, 0)) sfx.move(); }, ARR);
+    }, DAS) };
+  }
+  function stopRepeat() { if (repeat) { clearTimeout(repeat.timer); clearInterval(repeat.timer); repeat = null; } }
+
+  function startGame() { reset(); state = 'play'; showOverlay(); }
+
+  window.addEventListener('keydown', e => {
+    const k = e.key;
+    if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown',' '].includes(k)) e.preventDefault();
+    if (k === 'm' || k === 'M') { muted = !muted; return; }
+    if (k === 'Enter' && (state === 'start' || state === 'over')) { startGame(); return; }
+    if (k === 'p' || k === 'P') {
+      if (state === 'play') { state = 'pause'; showOverlay(); }
+      else if (state === 'pause') { state = 'play'; showOverlay(); }
+      return;
+    }
+    if (e.repeat) { keys.add(k); return; }
+    keys.add(k);
+    if (state !== 'play') return;
+    switch (k) {
+      case 'ArrowLeft': if (tryMove(-1, 0)) sfx.move(); startRepeat(-1); break;
+      case 'ArrowRight': if (tryMove(1, 0)) sfx.move(); startRepeat(1); break;
+      case 'ArrowUp': case 'x': case 'X': tryRotate(1); break;
+      case 'z': case 'Z': tryRotate(-1); break;
+      case ' ': hardDrop(); break;
+      case 'c': case 'C': case 'Shift': doHold(); break;
+    }
+  });
+  window.addEventListener('keyup', e => {
+    keys.delete(e.key);
+    if (repeat && ((e.key === 'ArrowLeft' && repeat.dir === -1) || (e.key === 'ArrowRight' && repeat.dir === 1))) stopRepeat();
+  });
+  window.addEventListener('blur', () => { keys.clear(); stopRepeat(); if (state === 'play') { state = 'pause'; showOverlay(); } });
+
+  // ---- 시작 ----
+  $('best').textContent = best;
+  reset(); state = 'start'; showOverlay();
+  requestAnimationFrame(t => { lastTime = t; frame(t); });
+})();
+</script>
+</body>
+</html>
