@@ -63,7 +63,7 @@
   // 네온 블록 한 칸: 꽉 찬 단색 + 윗면 하이라이트 + 번지는 글로우
   function paintBlock(ctx, px, py, size, color, glow) {
     ctx.save();
-    ctx.shadowColor = color; ctx.shadowBlur = glow ? 20 : 10;
+    ctx.shadowColor = color; ctx.shadowBlur = glow ? 12 : 5;
     ctx.fillStyle = color;
     ctx.fillRect(px + 1, py + 1, size - 2, size - 2);
     ctx.shadowBlur = 0;
