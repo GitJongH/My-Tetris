@@ -54,7 +54,29 @@
 <script>
 (() => {
   const COLS = 10, ROWS = 20, CELL = 30;
-  const COLORS = { I:'#2ee6e6', O:'#f5d82e', T:'#b44cf0', S:'#4cd964', Z:'#f0443c', J:'#3d6bff', L:'#ff9a2e' };
+  const COLORS = { I:'#19e3ff', O:'#ffd23f', T:'#e056ff', S:'#34f58b', Z:'#ff4d6d', J:'#5b7cff', L:'#ff9f1c' };
+  function shade(hex, amt) {
+    const n = parseInt(hex.slice(1), 16);
+    const f = c => Math.max(0, Math.min(255, Math.round(amt < 0 ? c * (1 + amt) : c + (255 - c) * amt)));
+    return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`;
+  }
+  // 입체감 있는 블록 한 칸: 그라데이션 + 밝은 모서리 + 어두운 모서리 + 안쪽 광택
+  function paintBlock(ctx, px, py, size, color, glow) {
+    const g = ctx.createLinearGradient(px, py, px + size, py + size);
+    g.addColorStop(0, shade(color, 0.45)); g.addColorStop(0.5, color); g.addColorStop(1, shade(color, -0.45));
+    ctx.save();
+    if (glow) { ctx.shadowColor = color; ctx.shadowBlur = 12; }
+    ctx.fillStyle = g; ctx.fillRect(px + 1, py + 1, size - 2, size - 2);
+    ctx.restore();
+    const b = Math.max(3, size * 0.14);
+    ctx.fillStyle = shade(color, 0.6);
+    ctx.beginPath(); ctx.moveTo(px + 1, py + 1); ctx.lineTo(px + size - 1, py + 1); ctx.lineTo(px + size - 1 - b, py + 1 + b); ctx.lineTo(px + 1 + b, py + 1 + b); ctx.lineTo(px + 1 + b, py + size - 1 - b); ctx.lineTo(px + 1, py + size - 1); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = shade(color, -0.55);
+    ctx.beginPath(); ctx.moveTo(px + size - 1, py + size - 1); ctx.lineTo(px + 1, py + size - 1); ctx.lineTo(px + 1 + b, py + size - 1 - b); ctx.lineTo(px + size - 1 - b, py + size - 1 - b); ctx.lineTo(px + size - 1 - b, py + 1 + b); ctx.lineTo(px + size - 1, py + 1); ctx.closePath(); ctx.fill();
+    const c = ctx.createLinearGradient(px, py + b, px, py + size - b);
+    c.addColorStop(0, 'rgba(255,255,255,.35)'); c.addColorStop(0.45, 'rgba(255,255,255,0)');
+    ctx.fillStyle = c; ctx.fillRect(px + 1 + b, py + 1 + b, size - 2 - b * 2, size - 2 - b * 2);
+  }
   const SHAPES = {
     I:[[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
     O:[[1,1],[1,1]],
@@ -327,12 +349,12 @@
   }
 
   // ---- 그리기 ----
-  function drawCell(ctx, x, y, color, size, alpha = 1) {
+  function drawCell(ctx, x, y, color, size, alpha = 1, glow = false) {
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = color;
-    ctx.fillRect(x * size + 1, y * size + 1, size - 2, size - 2);
-    ctx.fillStyle = 'rgba(255,255,255,.22)';
-    ctx.fillRect(x * size + 1, y * size + 1, size - 2, 4);
+    if (alpha < 0.5) {
+      ctx.strokeStyle = color; ctx.lineWidth = 2;
+      ctx.strokeRect(x * size + 2, y * size + 2, size - 4, size - 4);
+    } else paintBlock(ctx, x * size, y * size, size, color, glow);
     ctx.globalAlpha = 1;
   }
   function drawMini(ctx, cv, types) {
@@ -347,8 +369,7 @@
       const w = (maxX - minX + 1) * size, h = (maxY - minY + 1) * size;
       const ox = (cv.width - w) / 2, oy = i * 60 + (60 - h) / 2;
       filled.forEach(([x, y]) => {
-        ctx.fillStyle = COLORS[t];
-        ctx.fillRect(ox + (x - minX) * size + 1, oy + (y - minY) * size + 1, size - 2, size - 2);
+        paintBlock(ctx, ox + (x - minX) * size, oy + (y - minY) * size, size, COLORS[t], false);
       });
     });
   }
@@ -369,7 +390,7 @@
         if (v && gy + y >= 0) drawCell(bctx, piece.x + x, gy + y, COLORS[piece.type], CELL, 0.22);
       }));
       piece.shape.forEach((row, y) => row.forEach((v, x) => {
-        if (v && piece.y + y >= 0) drawCell(bctx, piece.x + x, piece.y + y, COLORS[piece.type], CELL);
+        if (v && piece.y + y >= 0) drawCell(bctx, piece.x + x, piece.y + y, COLORS[piece.type], CELL, 1, true);
       }));
     }
     if (flashTime > 0) {
